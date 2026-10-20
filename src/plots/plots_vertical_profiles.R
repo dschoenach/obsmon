@@ -43,7 +43,7 @@ stationVerticalProfilePlottingFunction <- function(plot) {
       scale_linetype_manual(name=NULL, values=legendLinetypes) +
       scale_shape_manual(name=NULL, values=legendShapes) +
       geom_point(data=localPlotData, aes(y=value), size=2) +
-      geom_line(data=plotDataSummary, aes(y=mean), size=0.85) +
+      geom_line(data=plotDataSummary, aes(y=mean), linewidth=0.85) +
       geom_linerange(
         data=plotDataSummary, aes(ymin=min, ymax=max),
         alpha=0.25
