@@ -65,11 +65,13 @@ addErrorbar <- function(obplot, sdBarData, strObnumber, hasComp=FALSE) {
   }
 
   if (hasComp) {
+    sdBarData$legendGroup <- paste(sdBarData$experiment,
+      sub("_sd$", "_mean", sdBarData$property), sep=": ")
     if(strObnumber %in% c("1", "4", "9")) {
       obplot <- obplot +
         geom_errorbar(
           data=sdBarData,
-          inherit.aes=FALSE,
+          inherit.aes=TRUE,
           show.legend=TRUE,
           width=errorbarWidth,
           mapping=aes(
@@ -78,8 +80,7 @@ addErrorbar <- function(obplot, sdBarData, strObnumber, hasComp=FALSE) {
             ymin=mean - sd,
             ymax=mean + sd,
             group=paste(experiment, property, sep=" :: "),
-            colour=experiment,
-            key=experiment
+            colour=experiment
           ),
           position=position_dodge(width=0.8)
         )
@@ -87,7 +88,7 @@ addErrorbar <- function(obplot, sdBarData, strObnumber, hasComp=FALSE) {
       obplot <- obplot +
         geom_errorbar(
           data=sdBarData,
-          inherit.aes=FALSE,
+          inherit.aes=TRUE,
           show.legend=TRUE,
           width=errorbarWidth,
           mapping=aes(
@@ -95,11 +96,9 @@ addErrorbar <- function(obplot, sdBarData, strObnumber, hasComp=FALSE) {
             y=mean,
             ymin=mean - sd,
             ymax=mean + sd,
-            group=paste(experiment, property, sep=" :: "),
-            colour=experiment,
-            key=paste(experiment, sub("_sd$", "_mean", property), sep=" :: ")
-          ),
-          position=position_dodge(width=0.2)
+            group=legendGroup,
+            colour=legendGroup
+          )
         )
     }
   } else {
@@ -165,6 +164,9 @@ firstGuessAndAnPlottingFunction <-  function(plot) {
     mainPlotData$experiment <- primaryExperimentName
   }
 
+  if(hasComp) {
+    mainPlotData$legendGroup <- paste(mainPlotData$experiment, mainPlotData$variable, sep=": ")
+  }
   dataIsStdMask <- endsWith(as.character(mainPlotData$variable), "_sd")
   mainPlotData <- mainPlotData[!dataIsStdMask, ]
 
@@ -242,11 +244,9 @@ firstGuessAndAnPlottingFunction <-  function(plot) {
             aes(
               x=variable,
               y=value,
-              group=paste(experiment, variable, sep=" :: "),
               color=experiment,
               fill=experiment,
-              shape=variable,
-              key=experiment
+              group=experiment
             ) +
             geom_bar(
               stat="identity",
@@ -289,30 +289,19 @@ firstGuessAndAnPlottingFunction <-  function(plot) {
         # Main data in plot
         if (hasComp) {
           experimentColours <- .getExperimentColourValues(mainPlotData$experiment)
-          variableLinetypes <- .getVariableLineTypeValues(mainPlotData$variable)
+          legendColours <- .comparisonScaleValues(mainPlotData, experimentColours, "experiment")
+          legendShapes <- .comparisonScaleValues(mainPlotData, dataCol2Shape)
+          legendLinetypes <- .comparisonScaleValues(mainPlotData,
+            .getVariableLineTypeValues(mainPlotData$variable))
           obplot <- ggplot(data=mainPlotData) +
-            geom_line(
-              aes(
-                x=level, y=value,
-                group=paste(experiment, variable, sep=" :: "),
-                colour=experiment, linetype=variable,
-                key=paste(experiment, variable, sep=" :: ")
-              ),
-              linewidth=.getComparisonLineWidth()
-            ) +
-            geom_point(
-              aes(
-                x=level, y=value,
-                group=paste(experiment, variable, sep=" :: "),
-                colour=experiment, shape=variable, fill=experiment,
-                key=paste(experiment, variable, sep=" :: ")
-              ),
-              size=.getComparisonPointSize(2.8)
-            ) +
-            scale_shape_manual(name=NULL, values=dataCol2Shape) +
-            scale_colour_manual(name="Experiment", values=experimentColours) +
-            scale_fill_manual(name="Experiment", values=experimentColours) +
-            scale_linetype_manual(name=NULL, values=variableLinetypes) +
+            aes(x=level, y=value, group=legendGroup, colour=legendGroup,
+              linetype=legendGroup, shape=legendGroup, fill=legendGroup) +
+            geom_line(size=0.85) +
+            geom_point(size=2.8) +
+            scale_shape_manual(name=NULL, values=legendShapes) +
+            scale_colour_manual(name=NULL, values=legendColours) +
+            scale_fill_manual(name=NULL, values=legendColours) +
+            scale_linetype_manual(name=NULL, values=legendLinetypes) +
             coord_flip_wrapper(default=TRUE) +
             labs(x=xlab, y=ylab)
         } else {
@@ -358,6 +347,10 @@ firstGuessAndAnPlottingFunction <-  function(plot) {
         }
       }
     )
+  }
+  if(hasComp) {
+    if(strObnumber %in% c("1", "4", "9")) mainPlotData$legendGroup <- mainPlotData$experiment
+    obplot <- .withComparisonLegend(obplot, mainPlotData)
   }
   return(obplot)
 }

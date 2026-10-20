@@ -54,13 +54,13 @@ observeEvent(plotProgressStatus()(), {
   removeNotification(plotStartedNotifId())
   progress <- plotProgressBar()
   if(is.null(progress)) {
-    progress <- shiny::Progress$new(max=pProgress$total)
+    progress <- shiny::Progress$new(max=1)
     plotProgressBar(progress)
   }
   # Subtract 1 from barValue as progress is updated when the process begins
   barValue <- pProgress$current-1
   progress$set(
-    value=barValue,
+    value=barValue/pProgress$total,
     message=sprintf(
       "Plot: Querying %s data files: %.0f%%",
       pProgress$total,  100.0*(barValue/pProgress$total)
@@ -157,10 +157,13 @@ observeEvent(input$doPlot, {
 
   # Trigger creation of progress bar
   plotProgressFile(tempfile(pattern="plotProgress"))
+  progress <- shiny::Progress$new(max=1)
+  progress$set(value=0, message="Plot: Querying experiment data...")
+  plotProgressBar(progress)
 
   # Fetch raw data asyncronously so that the app ramins responsive
   asyncNewPlotAndOutput <- futureCall(
-    FUN=function(parentType, db, paramsAsInUiInput, modelDomain, enableComparison, compDbs, primaryExperimentName, ...) {
+    FUN=function(parentType, db, paramsAsInUiInput, modelDomain, enableComparison, compDbs, primaryExperimentName, progressFile, plotDtgs) {
       output <- capture.output({
         newPlot <- obsmonPlotClass$new(
           parentType=parentType,
@@ -168,7 +171,6 @@ observeEvent(input$doPlot, {
           modelDomain=modelDomain,
           paramsAsInUiInput=paramsAsInUiInput
         )
-        newPlot$fetchRawData(...)
         newPlot$primaryExperimentName <- primaryExperimentName
 
         if (enableComparison && length(compDbs)>0) {
@@ -184,12 +186,21 @@ observeEvent(input$doPlot, {
               modelDomain=modelDomain,
               paramsAsInUiInput=compParamsAsInUiInput
             )
-            compPlot$fetchRawData()
             compPlot$primaryExperimentName <- compDbConfig$experimentName
             compPlots[[length(compPlots)+1]] <- compPlot
           }
 
           newPlot$compPlots <- compPlots
+        }
+        plots <- c(list(newPlot), .getComparisonPlots(newPlot))
+        queryCounts <- vapply(plots, function(plot) {
+          length(plot$db$getDataFilePaths(selectedDtgs=plotDtgs))
+        }, integer(1))
+        offset <- 0
+        for(i in seq_along(plots)) {
+          plots[[i]]$fetchRawData(progressFile=progressFile,
+            progressOffset=offset, progressTotal=sum(queryCounts))
+          offset <- offset + queryCounts[[i]]
         }
       })
       return(list(newPlot=newPlot, output=output))
@@ -199,6 +210,7 @@ observeEvent(input$doPlot, {
       db=primaryDb,
       paramsAsInUiInput=reactiveValuesToList(input),
       progressFile=plotProgressFile(),
+      plotDtgs=plotDtgs,
       modelDomain=sessionDomain(),
       enableComparison=enableComparison,
       compDbs=compDbs,

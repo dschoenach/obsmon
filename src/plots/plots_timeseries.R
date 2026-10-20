@@ -131,61 +131,36 @@ landSeaDeparturesTimeseriesPlotPostProcessingFunction <- function(data, ...) {
   }
 
   if (hasComp) {
-    experimentColours <- .getExperimentColourValues(localPlotData$experiment)
-    variableLinetypes <- .getVariableLineTypeValues(localPlotData$variable)
-    if(showVariableLegend) {
-      localPlotData$legendKey <- paste(localPlotData$experiment,
-        localPlotData$variable, sep=" :: ")
-      legendKeys <- unique(localPlotData$legendKey)
-      keyExperiments <- localPlotData$experiment[match(legendKeys, localPlotData$legendKey)]
-      keyVariables <- localPlotData$variable[match(legendKeys, localPlotData$legendKey)]
-      legendColours <- setNames(unname(experimentColours[keyExperiments]), legendKeys)
-      variableOrder <- levels(factor(localPlotData$variable))
-      shapeValues <- shapes
-      if(!is.null(shapeValues) && is.null(names(shapeValues))) {
-        names(shapeValues) <- variableOrder[seq_len(min(length(shapeValues), length(variableOrder)))]
+    localPlotData$legendGroup <- if(showVariableLegend) {
+      metric <- as.character(localPlotData$variable)
+      if(plot$parentType$name == "Bias Correction") {
+        metric[metric == "fg_bias_total"] <- "fg_corr"
+        metric[metric == "fg_uncorr_total"] <- "fg_uncorr"
       }
-      keyShapes <- if(is.null(shapeValues)) rep(16, length(keyVariables)) else
-        unname(shapeValues[as.character(keyVariables)])
-      keyLinetypes <- unname(variableLinetypes[as.character(keyVariables)])
-      obplot <- ggplot(data=localPlotData) +
-        geom_line(
-          aes(x=DTG, y=value, group=paste(experiment, variable, sep=" :: "),
-            linetype=variable, colour=legendKey),
-          na.rm=TRUE, alpha=comparisonLineAlpha,
-          linewidth=.getComparisonLineWidth()
-        ) +
-        geom_point(
-          aes(x=DTG, y=value, group=paste(experiment, variable, sep=" :: "),
-            shape=variable, colour=legendKey, fill=legendKey),
-          na.rm=TRUE, size=comparisonPointSize
-        ) +
-        scale_colour_manual(name=NULL, values=legendColours,
-          guide=guide_legend(override.aes=list(
-            linetype=keyLinetypes, shape=keyShapes, fill=unname(legendColours)
-          ))) +
-        scale_fill_manual(name=NULL, values=legendColours, guide="none") +
-        scale_linetype_manual(name=NULL, values=variableLinetypes, guide="none") +
-        labs(x="DATE") +
-        facet_wrap("level", labeller=label_both)
+      paste(localPlotData$experiment, metric, sep=": ")
     } else {
-      obplot <- ggplot(data=localPlotData) +
-        geom_line(
-          aes(x=DTG, y=value, group=paste(experiment, variable, sep=" :: "),
-            linetype=variable, colour=experiment),
-          na.rm=TRUE, linewidth=.getComparisonLineWidth()
-        ) +
-        geom_point(
-          aes(x=DTG, y=value, group=paste(experiment, variable, sep=" :: "),
-            shape=variable, colour=experiment, fill=experiment),
-          na.rm=TRUE, size=.getComparisonPointSize(2.6)
-        ) +
-        scale_colour_manual(name="Experiment", values=experimentColours) +
-        scale_fill_manual(name="Experiment", values=experimentColours) +
-        scale_linetype_manual(name=NULL, values=variableLinetypes) +
-        labs(x="DATE") +
-        facet_wrap("level", labeller=label_both)
+      localPlotData$experiment
     }
+    variableOrder <- levels(factor(localPlotData$variable))
+    shapeValues <- shapes
+    if(is.null(shapeValues)) shapeValues <- setNames(rep(16, length(variableOrder)), variableOrder)
+    if(is.null(names(shapeValues))) names(shapeValues) <- variableOrder
+    legendColours <- .comparisonScaleValues(localPlotData,
+      .getExperimentColourValues(localPlotData$experiment), "experiment")
+    legendShapes <- .comparisonScaleValues(localPlotData, shapeValues)
+    legendLinetypes <- .comparisonScaleValues(localPlotData,
+      .getVariableLineTypeValues(localPlotData$variable))
+    obplot <- ggplot(data=localPlotData) +
+      aes(x=DTG, y=value, group=legendGroup, colour=legendGroup,
+        linetype=legendGroup, shape=legendGroup, fill=legendGroup) +
+      geom_line(na.rm=TRUE, alpha=comparisonLineAlpha, size=0.85) +
+      geom_point(na.rm=TRUE, size=comparisonPointSize) +
+      scale_colour_manual(name=NULL, values=legendColours) +
+      scale_fill_manual(name=NULL, values=legendColours) +
+      scale_linetype_manual(name=NULL, values=legendLinetypes) +
+      scale_shape_manual(name=NULL, values=legendShapes) +
+      labs(x="DATE") +
+      facet_wrap("level", labeller=label_both)
   } else {
     obplot <- ggplot(data=localPlotData) +
       geom_line(aes(x=DTG, y=value, group=variable), na.rm=TRUE, alpha=.1) +
@@ -198,11 +173,10 @@ landSeaDeparturesTimeseriesPlotPostProcessingFunction <- function(data, ...) {
       theme(legend.title=element_blank())
   }
 
-  if (!is.null(shapes)) {
+  if (!hasComp && !is.null(shapes)) {
     obplot <- obplot +
       scale_shape_manual(
-        values=if(hasComp && showVariableLegend) shapeValues else shapes,
-        guide=if(hasComp && showVariableLegend) "none" else waiver()
+        values=shapes
       )
   }
   if (!hasComp) {
@@ -215,13 +189,11 @@ landSeaDeparturesTimeseriesPlotPostProcessingFunction <- function(data, ...) {
         scale_colour_brewer(palette="Spectral")
     }
   }
-  if(hasComp && !showVariableLegend) {
-    obplot <- obplot + guides(shape="none", fill="none", linetype="none")
-  }
   if(!hasComp && length(levels(localPlotData$variable))<2) {
     # Only show legend when there are at least 2 different variables plotted
     obplot <- obplot + theme(legend.position = "none")
   }
+  if(hasComp) obplot <- .withComparisonLegend(obplot, localPlotData)
   obplot
 }
 
@@ -229,7 +201,7 @@ landSeaDeparturesTimeseriesPlotPostProcessingFunction <- function(data, ...) {
   ggplotPlot <- plot
   if(!inherits(plot, "ggplot")) ggplotPlot <- .getStaticGenericTimeseriesPlot(plot)
 
-  myPlotly <- ggplotly(ggplotPlot, tooltip=c("x","y")) %>%
+  myPlotly <- .applyComparisonLegend(ggplotly(ggplotPlot, tooltip=c("x","y")), ggplotPlot) %>%
     layout(
       margin=list(
         t=100,
@@ -304,18 +276,7 @@ obsFitTimeseriesPlottingFunction <- function(plot) {
     comparisonData=comparisonData
   ) + ylab(ylab)
   chart <- .getInteractiveGenericTimeseriesPlot(baseGgplotPlot)
-  metricNames <- c(
-    "fg_rms_total", "an_rms_total", "fg_bias_total", "an_bias_total"
-  )
-  metricNames <- metricNames[metricNames %in% colnames(comparisonData)]
-
-  cleanPlotlyLegend(
-    chart,
-    .getPlotExperimentName(plot, "primary"),
-    .getComparisonExperimentNames(plot),
-    metricNames=metricNames,
-    experimentColours=.getExperimentColourValues(comparisonData$experiment)
-  )
+  chart
 }
 
 firstGuessTotalTimeseriesPlottingFunction <- function(plot) {
@@ -327,10 +288,11 @@ firstGuessTotalTimeseriesPlottingFunction <- function(plot) {
     labelData <- .combinePlotDataByExperiment(plot, maskColumns=c("varname"))
     timeSpan <- diff(range(as.numeric(labelData$DTG), na.rm=TRUE))
     dodgeWidth <- if(is.finite(timeSpan) && timeSpan > 0) timeSpan / max(10, length(unique(labelData$DTG))) * 0.25 else 0.25
+    labelData$legendGroup <- paste(labelData$experiment, "fg_uncorr", sep=": ")
     labelLayer <- geom_text(
       data=labelData,
       aes(x=DTG, y=fg_uncorr_total, label=nobs_total,
-        group=experiment, colour=experiment),
+        group=legendGroup, colour=legendGroup),
       position=position_dodge(width=dodgeWidth),
       show.legend=FALSE
     )
@@ -429,7 +391,7 @@ landSeaDeparturesTimeseriesPlottingFunction <- function(plot) {
   return(grid.arrange(baseGgplotPlotTop, baseGgplotPlotBottom, ncol=1))
 }
 
-hovmollerTimeseriesPlottingFunction <- function(plot) {
+hovmollerTimeseriesPlottingFunction <- function(plot, colourLimits=NULL, showColorbar=TRUE) {
   if(nrow(plot$data)==0) return(errorPlot("No data to plot."))
 
   baseGgplotPlot <- ggplot(plot$data) +
@@ -437,6 +399,22 @@ hovmollerTimeseriesPlottingFunction <- function(plot) {
     geom_tile() +
     labs(x="DATE", y="Channel")
 
+  if(!is.null(colourLimits)) {
+    baseGgplotPlot <- baseGgplotPlot + scale_fill_gradient(limits=colourLimits)
+    if(!showColorbar) baseGgplotPlot <- baseGgplotPlot + theme(legend.position="none")
+  }
+  if(plot$parentType$interactive && !is.null(colourLimits)) {
+    data <- plot$data
+    dates <- sort(unique(data$DTG))
+    levels <- sort(unique(data$level))
+    values <- matrix(NA_real_, nrow=length(levels), ncol=length(dates))
+    values[cbind(match(data$level, levels), match(data$DTG, dates))] <- data$fg_bias_total
+    return(plot_ly(x=dates, y=levels, z=values, type="heatmap",
+      zmin=colourLimits[[1]], zmax=colourLimits[[2]],
+      colorscale=list(c(0, "#132B43"), c(1, "#56B1F7")),
+      showscale=showColorbar, colorbar=list(title="fg_bias_total")) %>%
+      layout(xaxis=list(title="DATE"), yaxis=list(title="Channel"), margin=list(t=100)))
+  }
   if(plot$parentType$interactive) {
     return(.getInteractiveGenericTimeseriesPlot(baseGgplotPlot))
   }

@@ -24,25 +24,26 @@ stationVerticalProfilePlottingFunction <- function(plot) {
       group_by(level, experiment, variable) %>%
       summarize_all(list(~mean(.), ~min(.), ~max(.)))
 
-    experimentColours <- .getExperimentColourValues(localPlotData$experiment)
-    legendColours <- setNames(
-      experimentColours[as.character(localPlotData$experiment)],
-      paste(localPlotData$experiment, localPlotData$variable, sep=" :: ")
-    )
-    variableLinetypes <- .getVariableLineTypeValues(localPlotData$variable)
+    localPlotData$legendGroup <- paste(localPlotData$experiment, localPlotData$variable, sep=": ")
+    plotDataSummary$legendGroup <- paste(plotDataSummary$experiment, plotDataSummary$variable, sep=": ")
+    legendColours <- .comparisonScaleValues(localPlotData,
+      .getExperimentColourValues(localPlotData$experiment), "experiment")
+    legendLinetypes <- .comparisonScaleValues(localPlotData,
+      .getVariableLineTypeValues(localPlotData$variable))
+    legendShapes <- .comparisonScaleValues(localPlotData,
+      setNames(c(16, 17, 15)[seq_along(unique(localPlotData$variable))], unique(localPlotData$variable)))
 
     obplot <- ggplot() +
       aes(
         x=level,
-        group=paste(experiment, variable, sep=" :: "),
-        colour=paste(experiment, variable, sep=" :: "),
-        shape=variable,
-        linetype=variable
+        group=legendGroup, colour=legendGroup,
+        shape=legendGroup, linetype=legendGroup
       ) +
-      scale_colour_manual(name="Experiment", values=legendColours) +
-      scale_linetype_manual(name=NULL, values=variableLinetypes) +
-      geom_point(data=localPlotData, aes(y=value), size=.getComparisonPointSize(2)) +
-      geom_line(data=plotDataSummary, aes(y=mean), linewidth=.getComparisonLineWidth()) +
+      scale_colour_manual(name=NULL, values=legendColours) +
+      scale_linetype_manual(name=NULL, values=legendLinetypes) +
+      scale_shape_manual(name=NULL, values=legendShapes) +
+      geom_point(data=localPlotData, aes(y=value), size=2) +
+      geom_line(data=plotDataSummary, aes(y=mean), size=0.85) +
       geom_linerange(
         data=plotDataSummary, aes(ymin=min, ymax=max),
         alpha=0.25
@@ -108,6 +109,7 @@ stationVerticalProfilePlottingFunction <- function(plot) {
     obplot <- obplot + theme(legend.position = "none")
   }
 
+  if(hasComp) obplot <- .withComparisonLegend(obplot, localPlotData)
   return(obplot)
 }
 

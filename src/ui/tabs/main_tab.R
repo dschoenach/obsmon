@@ -284,7 +284,8 @@ mainTab <- function() {fluidPage(
           options=list(`live-search`=TRUE, size=10)
         ),
         uiOutput("compExperimentAvailability"),
-        uiOutput("compOdbBaseChoices")
+        uiOutput("compOdbBaseChoices"),
+        helpText("Compared maps appear in the Plot tab. The interactive Map tab is available for a single experiment.")
       ),
       actionButton("doPlot", "Plot", width="100%",
         icon("ok", lib="glyphicon")

@@ -778,3 +778,97 @@ test_that("land-sea comparisons label every experiment and legend", {
   }
   expect_true(all(grepl("^exp[ABC]: ", labels)))
 })
+
+test_that("Hovmoller comparisons share a colour range and a single colourbar", {
+  raw <- data.frame(
+    DTG=rep(as.POSIXct(c("2019-08-06 12:00:00", "2019-08-06 15:00:00"), tz="UTC"), 2),
+    level=rep(1:2, each=2), nobs_total=5, fg_bias_total=1:4
+  )
+  plot <- comparisonTestPlots(plotRegistry$plotTypes[["Hovmöller"]], raw)
+  plot$compPlots[[1]]$rawData$fg_bias_total <- 10:13
+  plot$compPlots[[2]]$rawData$fg_bias_total <- -4:-1
+  chart <- plotly_build(plot$chart)
+  heatmaps <- Filter(function(trace) identical(trace$type, "heatmap"), chart$x$data)
+  expect_length(heatmaps, 3)
+  for(trace in heatmaps) {
+    expect_equal(trace$zmin, -4)
+    expect_equal(trace$zmax, 13)
+    expect_equal(trace$colorscale, heatmaps[[1]]$colorscale)
+  }
+  expect_equal(sum(vapply(heatmaps, function(trace) isTRUE(trace$showscale), logical(1))), 1)
+})
+
+test_that("comparison legends use explicit labels for timeseries and statistics", {
+  raw <- data.frame(
+    DTG=rep(as.POSIXct(c("2019-08-06 12:00:00", "2019-08-06 15:00:00"), tz="UTC"), 2),
+    level=rep(1:2, each=2), varname="t", nobs_total=5,
+    fg_bias_total=1:4, an_bias_total=2:5,
+    fg_rms_total=3:6, an_rms_total=4:7, fg_uncorr_total=5:8,
+    fg_dep_total=1:4, an_dep_total=2:5
+  )
+  cases <- list(
+    "ObsFit"=c("fg_rms_total", "an_rms_total", "fg_bias_total", "an_bias_total"),
+    "Number of Observations"=NULL,
+    "Bias Correction"=c("fg_corr", "fg_uncorr"),
+    "Average First Guess and Analysis Bias/RMS"=c(
+      "fg_bias_total_mean", "an_bias_total_mean", "fg_rms_total_mean", "an_rms_total_mean")
+  )
+  for(name in names(cases)) {
+    plot <- comparisonTestPlots(plotRegistry$plotTypes[[name]], raw)
+    chart <- plotly_build(plot$chart)
+    legend <- Filter(function(trace) isTRUE(trace$showlegend), chart$x$data)
+    labels <- vapply(legend, `[[`, character(1), "name")
+    expected <- if(is.null(cases[[name]])) c("expA", "expB", "expC") else
+      as.vector(outer(c("expA", "expB", "expC"), cases[[name]], paste, sep=": "))
+    expect_setequal(labels, expected)
+    expect_length(labels, length(expected))
+  }
+})
+
+test_that("statistical line errorbars align with points for channels", {
+  raw <- data.frame(
+    DTG=rep(as.POSIXct(c("2019-08-06 12:00:00", "2019-08-06 15:00:00"), tz="UTC"), 2),
+    level=rep(1:2, each=2), fg_bias_total=1:4, an_bias_total=2:5,
+    fg_rms_total=3:6, an_rms_total=4:7
+  )
+  plot <- comparisonTestPlots(
+    plotRegistry$plotTypes[["Average First Guess and Analysis Bias/RMS"]], raw)
+  for(p in c(list(plot), .getComparisonPlots(plot))) {
+    p$paramsAsInUiInput$obname <- "satem"
+    p$paramsAsInUiInput$sensor <- "amsua"
+    p$paramsAsInUiInput$variable <- "rad"
+  }
+  gg <- firstGuessAndAnPlottingFunction(plot)
+  built <- ggplot_build(gg)
+  points <- built$data[[2]]
+  errors <- built$data[[3]]
+  points <- points[order(points$group, points$x), ]
+  errors <- errors[order(errors$group, errors$x), ]
+  expect_equal(errors$x, points$x)
+  expect_equal(errors$y, points$y)
+  chart <- plotly_build(plot$parentType$ggplotlyWrapper(gg))
+  legend <- Filter(function(trace) isTRUE(trace$showlegend), chart$x$data)
+  expect_length(legend, 12)
+  expect_true(all(vapply(legend, function(trace) trace$name == trace$legendgroup, logical(1))))
+
+  for(p in c(list(plot), .getComparisonPlots(plot))) {
+    p$paramsAsInUiInput$obname <- "synop"
+    p$paramsAsInUiInput$variable <- "t2m"
+  }
+  chart <- plotly_build(plot$chart)
+  legend <- Filter(function(trace) isTRUE(trace$showlegend), chart$x$data)
+  expect_setequal(vapply(legend, `[[`, character(1), "name"), c("expA", "expB", "expC"))
+  expect_length(legend, 3)
+})
+
+test_that("comparison progress continues through all experiment queries", {
+  progressFile <- tempfile()
+  on.exit(unlink(progressFile))
+  plot <- comparisonTestPlots()
+  plots <- c(list(plot), .getComparisonPlots(plot))
+  for(i in seq_along(plots)) {
+    plots[[i]]$fetchRawData(progressFile=progressFile, progressOffset=i-1, progressTotal=3)
+    expect_equal(readPlotProgressFile(progressFile), list(current=i, total=3))
+    expect_gt(nrow(plots[[i]]$rawData), 0)
+  }
+})

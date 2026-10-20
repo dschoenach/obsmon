@@ -144,15 +144,16 @@ singleFileQuerier <- function(dbpath, query) {
   res
 }
 
-performSingleQuery <- function(iPath, dbpaths, query, progressFile=NULL) {
+performSingleQuery <- function(iPath, dbpaths, query, progressFile=NULL,
+                               progressOffset=0, progressTotal=length(dbpaths)) {
   # Using a file to get update on progress of plots
   # Unfortunately there was no other way to do this from within a future
   # at the time this code was written
   if(!is.null(progressFile)) {
     tryCatch({
       progressNow <- readPlotProgressFile(progressFile)
-      if(is.null(progressNow$current) || progressNow$current<iPath) {
-        write(c(iPath, length(dbpaths)), progressFile, append=FALSE)
+      if(is.null(progressNow$current) || progressNow$current<iPath + progressOffset) {
+        write(c(iPath + progressOffset, progressTotal), progressFile, append=FALSE)
       }
     },
       error=function(e) {flog.debug(e); unlink(progressFile); NULL},
@@ -166,7 +167,7 @@ performSingleQuery <- function(iPath, dbpaths, query, progressFile=NULL) {
 performQuery <- function(
   db, query, dtgs,
   maxAvgQueriesPerProc=obsmonConfig$general$maxAvgQueriesPerProc,
-  progressFile=NULL
+  progressFile=NULL, progressOffset=0, progressTotal=NULL
 ) {
   startTime <- Sys.time() # For debug purposes
   selectedDtgs <- dtgs
@@ -175,12 +176,14 @@ performQuery <- function(
     selectedDtgs <- expandDtgRange(range)
   }
   dbpaths <- db$getDataFilePaths(selectedDtgs)
+  if(is.null(progressTotal)) progressTotal <- length(dbpaths)
 
   res <- tryCatch({
       queryResult <- future_lapply(seq_along(dbpaths),
         partial(
           performSingleQuery, dbpaths=dbpaths,
-          query=query, progressFile=progressFile
+          query=query, progressFile=progressFile,
+          progressOffset=progressOffset, progressTotal=progressTotal
         ),
         future.seed=TRUE, # Just gets rid of a very annoying warning
         future.chunk.size=structure(maxAvgQueriesPerProc, ordering=seq_along(dbpaths))

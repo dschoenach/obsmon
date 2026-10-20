@@ -203,12 +203,34 @@ lockBinding("SPINNER_CHART", globalenv())
   setNames(rep(linetypes, length.out=length(variableNames)), variableNames)
 }
 
-.getComparisonLineWidth <- function() {
-  obsmonConfig$general$comparisonLineWidth
+# All mapped aesthetics use the same label, so ggplotly preserves the group
+# directly instead of constructing tuples of experiment and metric names.
+.comparisonScaleValues <- function(data, values, column="variable") {
+  groups <- data[!duplicated(data$legendGroup), ]
+  setNames(unname(values[as.character(groups[[column]])]), groups$legendGroup)
 }
 
-.getComparisonPointSize <- function(baseSize) {
-  baseSize * obsmonConfig$general$comparisonPointSizeScale
+.withComparisonLegend <- function(plot, data) {
+  attr(plot, "comparisonLegend") <- unlist(lapply(unique(data$experiment), function(experiment) {
+    unique(data$legendGroup[data$experiment == experiment])
+  }), use.names=FALSE)
+  plot
+}
+
+.applyComparisonLegend <- function(chart, ggplotPlot) {
+  groups <- attr(ggplotPlot, "comparisonLegend")
+  if(is.null(groups)) return(chart)
+  for(i in seq_along(chart$x$data)) {
+    if(identical(chart$x$data[[i]]$mode, "text")) {
+      chart$x$data[[i]]$showlegend <- FALSE
+      next
+    }
+    rank <- match(chart$x$data[[i]]$name, groups)
+    if(length(rank) != 1 || is.na(rank)) next
+    chart$x$data[[i]]$legendgroup <- groups[[rank]]
+    chart$x$data[[i]]$legendrank <- rank
+  }
+  layout(chart, legend=list(traceorder="normal", groupclick="togglegroup"))
 }
 
 .plotHasNoDataRows <- function(plot) {
@@ -407,12 +429,23 @@ lockBinding("SPINNER_CHART", globalenv())
   )
   experimentNames <- experimentNames[nonEmpty]
 
-  panels <- mapply(
-    FUN=.generateSingleComparisonPanel,
-    plot=plots,
-    title=experimentNames,
-    SIMPLIFY=FALSE
-  )
+  if(plot$parentType$name == "Hovmöller") {
+    values <- unlist(lapply(plots, function(p) p$data$fg_bias_total))
+    colourLimits <- range(values[is.finite(values)])
+    panels <- lapply(seq_along(plots), function(i) {
+      panel <- hovmollerTimeseriesPlottingFunction(plots[[i]], colourLimits,
+        showColorbar=i == length(plots))
+      if(!"plotly" %in% class(panel)) panel <- addTitleToPlot(panel, experimentNames[[i]])
+      panel
+    })
+  } else {
+    panels <- mapply(
+      FUN=.generateSingleComparisonPanel,
+      plot=plots,
+      title=experimentNames,
+      SIMPLIFY=FALSE
+    )
+  }
 
   if(all(vapply(panels, function(panel) "plotly" %in% class(panel), logical(1)))) {
     if(plot$parentType$category %in% c("Maps", "Average Maps")) {
@@ -468,148 +501,6 @@ lockBinding("SPINNER_CHART", globalenv())
   }
 
   grid.arrange(grobs=panels, ncol=length(panels))
-}
-
-cleanPlotlyLegend <- function(plotlyPlot, primaryName, compName,
-                              experimentOnly=FALSE, metricNames=character(0),
-                              experimentColours=NULL, metricLabels=NULL) {
-  pName <- .asScalarCharacterOrNa(primaryName)
-  cNames <- vapply(as.list(compName), .asScalarCharacterOrNa, character(1))
-  cNames <- cNames[!is.na(cNames)]
-  experimentOrder <- c(pName[!is.na(pName)], cNames)
-  metricNames <- unique(as.character(metricNames))
-  metricNames <- metricNames[!is.na(metricNames) & nzchar(metricNames)]
-  groupRanks <- integer(0)
-  comparisonLegendChanged <- FALSE
-
-  normalizeColour <- function(colour) {
-    colour <- .asScalarCharacterOrNa(colour)
-    if(is.na(colour)) return(NA_character_)
-    if(grepl("^rgba?\\(", colour, ignore.case=TRUE)) {
-      channels <- regmatches(colour, regexpr("[0-9]+[ ,]+[0-9]+[ ,]+[0-9]+", colour))
-      if(length(channels) > 0 && nzchar(channels)) {
-        rgbValues <- as.integer(strsplit(gsub(" +", "", channels), ",", fixed=TRUE)[[1]])
-        if(length(rgbValues) == 3 && !anyNA(rgbValues)) {
-          return(tolower(grDevices::rgb(rgbValues[1], rgbValues[2], rgbValues[3], maxColorValue=255)))
-        }
-      }
-    }
-    tolower(colour)
-  }
-
-  traceColour <- function(trace) {
-    candidates <- list(trace$line$color, trace$marker$color, trace$marker$line$color)
-    for(colour in candidates) {
-      normalized <- normalizeColour(colour)
-      if(!is.na(normalized)) return(normalized)
-    }
-    NA_character_
-  }
-
-  if (!is.null(plotlyPlot$x$data)) {
-    seenGroups <- character(0)
-    for (i in seq_along(plotlyPlot$x$data)) {
-      trace <- plotlyPlot$x$data[[i]]
-      traceY <- trace$y
-      if(!is.null(traceY) && (length(traceY) == 0 || all(is.na(traceY)))) {
-        plotlyPlot$x$data[[i]]$showlegend <- FALSE
-        next
-      }
-      traceName <- .asScalarCharacterOrNa(trace$name)
-      traceGroup <- .asScalarCharacterOrNa(trace$legendgroup)
-      if (is.na(traceName) && is.na(traceGroup)) next
-
-      traceKey <- .asScalarCharacterOrNa(trace$key)
-      parts <- if(!is.na(traceKey)) strsplit(traceKey, " :: ", fixed=TRUE)[[1]] else character(0)
-      if(length(parts) != 2 && !is.na(traceName)) {
-        parts <- strsplit(traceName, " :: ", fixed=TRUE)[[1]]
-      }
-      if(length(parts) != 2 && !is.na(traceGroup)) parts <- strsplit(traceGroup, " :: ", fixed=TRUE)[[1]]
-      if(experimentOnly) {
-        if(length(parts) == 2) {
-          experiment <- parts[[1]]
-        } else if(!is.na(traceKey) && traceKey %in% experimentOrder) {
-          experiment <- traceKey
-        } else if(!is.null(experimentColours)) {
-          colourMap <- vapply(experimentColours, normalizeColour, character(1))
-          colourIndex <- match(traceColour(trace), unname(colourMap))
-          if(is.na(colourIndex)) next
-          experiment <- names(colourMap)[[colourIndex]]
-        } else {
-          next
-        }
-        metric <- NA_character_
-      } else if(length(parts) == 2) {
-        rawExperiment <- sub("^\\(", "", parts[[1]])
-        experimentMatches <- experimentOrder[
-          startsWith(rawExperiment, experimentOrder)
-        ]
-        if(length(experimentMatches) > 0) {
-          experiment <- experimentMatches[[which.max(nchar(experimentMatches))]]
-        } else {
-          experiment <- rawExperiment
-        }
-
-        rawMetric <- sub(",.*$", "", parts[[2]])
-        rawMetric <- sub("\\)$", "", rawMetric)
-        metricMatches <- metricNames[startsWith(rawMetric, metricNames)]
-        if(rawMetric %in% metricNames) {
-          metric <- rawMetric
-        } else if(length(metricMatches) > 0) {
-          metric <- metricMatches[[which.max(nchar(metricMatches))]]
-        } else {
-          metric <- rawMetric
-        }
-      } else {
-        plotlyPlot$x$data[[i]]$showlegend <- FALSE
-        next
-      }
-
-      metricLabel <- metric
-      if(!is.null(metricLabels) && metric %in% names(metricLabels)) {
-        metricLabel <- unname(metricLabels[[metric]])
-      }
-      label <- if(experimentOnly) experiment else sprintf("%s: %s", experiment, metricLabel)
-      group <- if(experimentOnly) experiment else sprintf("%s: %s", experiment, metric)
-
-      # Grouping and show/hide logic
-      comparisonLegendChanged <- TRUE
-      plotlyPlot$x$data[[i]]$name <- label
-      plotlyPlot$x$data[[i]]$legendgroup <- group
-      rankKey <- if(experimentOnly) experiment else sprintf("%s :: %s", experiment, metric)
-      if(!rankKey %in% names(groupRanks)) {
-        experimentRank <- match(experiment, experimentOrder)
-        if(is.na(experimentRank)) experimentRank <- length(experimentOrder) + 1L
-        if(experimentOnly) {
-          groupRanks[[rankKey]] <- as.integer(experimentRank * 100L)
-        } else {
-          rankNames <- names(groupRanks)
-          if(is.null(rankNames)) rankNames <- character(0)
-          metricRank <- match(metric, metricNames)
-          if(is.na(metricRank)) {
-            metricsForExperiment <- rankNames[startsWith(rankNames,
-              paste0(experiment, " :: "))]
-            metricRank <- length(metricsForExperiment) + 1L
-          }
-          groupRanks[[rankKey]] <- as.integer(experimentRank * 100L + metricRank)
-        }
-      }
-      plotlyPlot$x$data[[i]]$legendrank <- groupRanks[[rankKey]]
-
-      if (group %in% seenGroups) {
-        plotlyPlot$x$data[[i]]$showlegend <- FALSE
-      } else {
-        plotlyPlot$x$data[[i]]$showlegend <- TRUE
-        seenGroups <- c(seenGroups, group)
-      }
-    }
-  }
-  if(comparisonLegendChanged) {
-    if(is.null(plotlyPlot$x$layout$legend)) plotlyPlot$x$layout$legend <- list()
-    plotlyPlot$x$layout$legend$traceorder <- "normal"
-    plotlyPlot$x$layout$legend$groupclick <- "togglegroup"
-  }
-  return(plotlyPlot)
 }
 
 plotTypeClass <- setRefClass(Class="obsmonPlotType",
@@ -750,7 +641,7 @@ plotTypeClass <- setRefClass(Class="obsmonPlotType",
       # Convert ggplot2 object ggplotPlot into a plotly object using
       # plotly's ggplotly function, and then apply some customisations
       plotlyPlot <- tryCatch({
-        ggplotly(ggplotPlot, tooltip=c("x","y")) %>%
+        .applyComparisonLegend(ggplotly(ggplotPlot, tooltip=c("x","y")), ggplotPlot) %>%
           layout(
             margin=list(t=100),
             legend=list(orientation="v", yanchor="center", y=0.5)
@@ -1051,39 +942,6 @@ obsmonPlotClass <- setRefClass(Class="obsmonPlot",
 
       plot <- plot %>% addTitleToPlot(.self$title)
       if("plotly" %in% class(plot)) {
-        isObsFit <- .self$parentType$name %in% c(
-          "ObsFit", "ObsFit (Active Observations Only)"
-        )
-        if(.plotHasComparison(.self) && .plotUsesJointComparison(.self) && !isObsFit) {
-          comparisonData <- .combinePlotDataByExperiment(.self)
-          isStatisticalBar <- .self$parentType$category == "Statistical" &&
-            as.character(.self$paramsAsInSqliteDbs$obnumber) %in% c("1", "4", "9")
-          metricNames <- setdiff(
-            colnames(comparisonData),
-            c("DTG", "level", "varname", "statid", "latitude", "longitude", "experiment")
-          )
-          isBiasCorrection <- .self$parentType$name == "Bias Correction"
-          metricLabels <- if(isBiasCorrection) {
-            c(fg_bias_total="fg_corr", fg_uncorr_total="fg_uncorr")
-          } else {
-            NULL
-          }
-          if(isBiasCorrection) {
-            metricNames <- intersect(c("fg_bias_total", "fg_uncorr_total"), metricNames)
-          }
-          experimentColours <- .getExperimentColourValues(
-            unique(as.character(comparisonData$experiment))
-          )
-          plot <- cleanPlotlyLegend(
-            plot,
-            .getPlotExperimentName(.self, "primary"),
-            .getComparisonExperimentNames(.self),
-            experimentOnly=(.self$parentType$category == "Timeseries" && !isBiasCorrection) || isStatisticalBar,
-            metricNames=metricNames,
-            experimentColours=experimentColours,
-            metricLabels=metricLabels
-          )
-        }
         plot <- plot %>% configPlotlyWrapper()
       }
 
