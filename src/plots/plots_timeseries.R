@@ -37,16 +37,42 @@
 
   # Filter for active
   dt <- dt[grepl("active", tolower(status))]
+  hasAnDep <- "an_dep" %in% colnames(dt)
+
+  # Summarize by:
+  #  - nobs_total
+  #  - keep departures for next group operation
+  if(hasAnDep) {
+    dt <- dt[, .(
+      nobs_total = .N,
+      fg_dep     = fg_dep,
+      an_dep     = an_dep
+    ), by=.(DTG, level, varname)]
+  } else {
+    dt <- dt[, .(
+      nobs_total = .N,
+      fg_dep     = fg_dep
+    ), by=.(DTG, level, varname)]
+  }
 
   # Now compute rms and bias by groups
-  dt <- dt[, .(
-    # total number of obs in this group
-    nobs_total    = .N,
-    fg_rms_total = sqrt(mean(fg_dep^2, na.rm = TRUE)),
-    an_rms_total = sqrt(mean(an_dep^2, na.rm = TRUE)),
-    fg_bias_total = mean(fg_dep, na.rm=TRUE),
-    an_bias_total = mean(an_dep, na.rm=TRUE)
-  ), by=.(DTG, level, varname)]
+  if(hasAnDep) {
+    dt <- dt[, .(
+      # total number of obs in this group
+      nobs_total    = .N,
+      fg_rms_total = sqrt(mean(fg_dep^2, na.rm=TRUE)),
+      an_rms_total = sqrt(mean(an_dep^2, na.rm=TRUE)),
+      fg_bias_total = mean(fg_dep, na.rm=TRUE),
+      an_bias_total = mean(an_dep, na.rm=TRUE)
+    ), by=.(DTG, level, varname)]
+  } else {
+    dt <- dt[, .(
+      # total number of obs in this group
+      nobs_total    = .N,
+      fg_rms_total = sqrt(mean(fg_dep^2, na.rm=TRUE)),
+      fg_bias_total = mean(fg_dep, na.rm=TRUE)
+    ), by=.(DTG, level, varname)]
+  }
 
   # Assign the same units as fg_dep or an_dep
   # (assuming these units existed originally)
@@ -82,35 +108,117 @@ landSeaDeparturesTimeseriesPlotPostProcessingFunction <- function(data, ...) {
 }
 
 .getStaticGenericTimeseriesPlot <- function(
-  plot, maskColumns=character(0), colours=NULL, shapes=NULL
+  plot, maskColumns=character(0), colours=NULL, shapes=NULL,
+  showVariableLegend=FALSE, comparisonData=NULL,
+  comparisonLineAlpha=1, comparisonPointSize=2.6
 ) {
+  hasComp <- .plotHasComparison(plot)
 
-  localPlotData <- melt(
-    plot$data[!(colnames(plot$data) %in% maskColumns)], id=c("DTG", "level")
-  )
+  if (hasComp) {
+    if(is.null(comparisonData)) {
+      combinedData <- .combinePlotDataByExperiment(plot, maskColumns=maskColumns)
+    } else {
+      combinedData <- comparisonData
+    }
+    localPlotData <- melt(combinedData, id=c("DTG", "level", "experiment"))
+  } else {
+    localPlotData <- melt(
+      plot$data[!(colnames(plot$data) %in% maskColumns)], id=c("DTG", "level")
+    )
+    primaryExperimentName <- .asScalarCharacterOrNa(plot$primaryExperimentName)
+    if(is.na(primaryExperimentName)) primaryExperimentName <- "primary"
+    localPlotData$experiment <- primaryExperimentName
+  }
 
-  obplot <- ggplot(data=localPlotData) +
-    geom_line(aes(x=DTG, y=value, group=variable), na.rm=TRUE, alpha=.1) +
-    geom_point(
-      aes(x=DTG, y=value, shape=variable, colour=variable, fill=variable),
-      na.rm=TRUE
-    ) +
-    labs(x="DATE") +
-    facet_wrap("level", labeller=label_both) +
-    theme(legend.title=element_blank())
+  if (hasComp) {
+    experimentColours <- .getExperimentColourValues(localPlotData$experiment)
+    variableLinetypes <- .getVariableLineTypeValues(localPlotData$variable)
+    if(showVariableLegend) {
+      localPlotData$legendKey <- paste(localPlotData$experiment,
+        localPlotData$variable, sep=" :: ")
+      legendKeys <- unique(localPlotData$legendKey)
+      keyExperiments <- localPlotData$experiment[match(legendKeys, localPlotData$legendKey)]
+      keyVariables <- localPlotData$variable[match(legendKeys, localPlotData$legendKey)]
+      legendColours <- setNames(unname(experimentColours[keyExperiments]), legendKeys)
+      variableOrder <- levels(factor(localPlotData$variable))
+      shapeValues <- shapes
+      if(!is.null(shapeValues) && is.null(names(shapeValues))) {
+        names(shapeValues) <- variableOrder[seq_len(min(length(shapeValues), length(variableOrder)))]
+      }
+      keyShapes <- if(is.null(shapeValues)) rep(16, length(keyVariables)) else
+        unname(shapeValues[as.character(keyVariables)])
+      keyLinetypes <- unname(variableLinetypes[as.character(keyVariables)])
+      obplot <- ggplot(data=localPlotData) +
+        geom_line(
+          aes(x=DTG, y=value, group=paste(experiment, variable, sep=" :: "),
+            linetype=variable, colour=legendKey),
+          na.rm=TRUE, alpha=comparisonLineAlpha,
+          linewidth=.getComparisonLineWidth()
+        ) +
+        geom_point(
+          aes(x=DTG, y=value, group=paste(experiment, variable, sep=" :: "),
+            shape=variable, colour=legendKey, fill=legendKey),
+          na.rm=TRUE, size=comparisonPointSize
+        ) +
+        scale_colour_manual(name=NULL, values=legendColours,
+          guide=guide_legend(override.aes=list(
+            linetype=keyLinetypes, shape=keyShapes, fill=unname(legendColours)
+          ))) +
+        scale_fill_manual(name=NULL, values=legendColours, guide="none") +
+        scale_linetype_manual(name=NULL, values=variableLinetypes, guide="none") +
+        labs(x="DATE") +
+        facet_wrap("level", labeller=label_both)
+    } else {
+      obplot <- ggplot(data=localPlotData) +
+        geom_line(
+          aes(x=DTG, y=value, group=paste(experiment, variable, sep=" :: "),
+            linetype=variable, colour=experiment),
+          na.rm=TRUE, linewidth=.getComparisonLineWidth()
+        ) +
+        geom_point(
+          aes(x=DTG, y=value, group=paste(experiment, variable, sep=" :: "),
+            shape=variable, colour=experiment, fill=experiment),
+          na.rm=TRUE, size=.getComparisonPointSize(2.6)
+        ) +
+        scale_colour_manual(name="Experiment", values=experimentColours) +
+        scale_fill_manual(name="Experiment", values=experimentColours) +
+        scale_linetype_manual(name=NULL, values=variableLinetypes) +
+        labs(x="DATE") +
+        facet_wrap("level", labeller=label_both)
+    }
+  } else {
+    obplot <- ggplot(data=localPlotData) +
+      geom_line(aes(x=DTG, y=value, group=variable), na.rm=TRUE, alpha=.1) +
+      geom_point(
+        aes(x=DTG, y=value, shape=variable, colour=variable, fill=variable),
+        na.rm=TRUE
+      ) +
+      labs(x="DATE") +
+      facet_wrap("level", labeller=label_both) +
+      theme(legend.title=element_blank())
+  }
+
   if (!is.null(shapes)) {
     obplot <- obplot +
-      scale_shape_manual(values=shapes)
+      scale_shape_manual(
+        values=if(hasComp && showVariableLegend) shapeValues else shapes,
+        guide=if(hasComp && showVariableLegend) "none" else waiver()
+      )
   }
-  if (!is.null(colours)) {
-    obplot <- obplot +
-      scale_colour_manual(values=colours) +
-      scale_fill_manual(values=colours)
-  } else {
-    obplot <- obplot +
-      scale_colour_brewer(palette="Spectral")
+  if (!hasComp) {
+    if (!is.null(colours)) {
+      obplot <- obplot +
+        scale_colour_manual(values=colours) +
+        scale_fill_manual(values=colours)
+    } else {
+      obplot <- obplot +
+        scale_colour_brewer(palette="Spectral")
+    }
   }
-  if(length(levels(localPlotData$variable))<2) {
+  if(hasComp && !showVariableLegend) {
+    obplot <- obplot + guides(shape="none", fill="none", linetype="none")
+  }
+  if(!hasComp && length(levels(localPlotData$variable))<2) {
     # Only show legend when there are at least 2 different variables plotted
     obplot <- obplot + theme(legend.position = "none")
   }
@@ -119,7 +227,7 @@ landSeaDeparturesTimeseriesPlotPostProcessingFunction <- function(data, ...) {
 
 .getInteractiveGenericTimeseriesPlot <- function(plot) {
   ggplotPlot <- plot
-  if(!is.ggplot(plot)) ggplotPlot <- .getStaticGenericTimeseriesPlot(plot)
+  if(!inherits(plot, "ggplot")) ggplotPlot <- .getStaticGenericTimeseriesPlot(plot)
 
   myPlotly <- ggplotly(ggplotPlot, tooltip=c("x","y")) %>%
     layout(
@@ -140,7 +248,7 @@ landSeaDeparturesTimeseriesPlotPostProcessingFunction <- function(data, ...) {
 
 # Register higher-level plotting functions
 genericTimeseriesPlottingFunction <- function(plot) {
-  if(nrow(plot$data)==0) return(errorPlot("No data to plot."))
+  if(!.plotHasAnyComparisonData(plot)) return(errorPlot("No data to plot."))
   if(plot$parentType$interactive) {
     return(.getInteractiveGenericTimeseriesPlot(plot))
   } else {
@@ -148,7 +256,8 @@ genericTimeseriesPlottingFunction <- function(plot) {
   }
 }
 obsFitTimeseriesPlottingFunction <- function(plot) {
-  if(nrow(plot$data)==0) return(errorPlot("No data to plot."))
+  if(!.plotHasAnyComparisonData(plot)) return(errorPlot("No data to plot."))
+  dataPlot <- .getFirstNonEmptyComparisonPlot(plot)
 
   fgColor <- "blue"
   anColor <- "red"
@@ -157,17 +266,22 @@ obsFitTimeseriesPlottingFunction <- function(plot) {
   fgBiasShape <- 21
   anBiasShape <- 1
 
+  ylab <- sprintf(
+    "%s [%s]",
+    unique(dataPlot$data$varname),
+    units(dataPlot$dataWithUnits[["fg_bias_total"]])
+  )
+  if(.plotHasComparison(plot) && plot$parentType$interactive) {
+    return(.getInteractiveComparisonObsFitPlot(plot, ylab))
+  }
+
   baseGgplotPlot <- .getStaticGenericTimeseriesPlot(
     plot,
     maskColumns=c("nobs_total", "varname"),
     colours=c(fgColor, anColor, fgColor, anColor),
-    shapes=c(fgRmsShape, anRmsShape, fgBiasShape, anBiasShape)
-  ) +
-    ylab(sprintf(
-      "%s [%s]",
-      unique(plot$data$varname),
-      units(plot$dataWithUnits[["fg_bias_total"]])
-    ))
+    shapes=c(fgRmsShape, anRmsShape, fgBiasShape, anBiasShape),
+    showVariableLegend=TRUE
+  ) + ylab(ylab)
 
   if(plot$parentType$interactive) {
     return(.getInteractiveGenericTimeseriesPlot(baseGgplotPlot))
@@ -175,19 +289,69 @@ obsFitTimeseriesPlottingFunction <- function(plot) {
   return(baseGgplotPlot)
 }
 
-firstGuessTotalTimeseriesPlottingFunction <- function(plot) {
-  if(nrow(plot$data)==0) return(errorPlot("No data to plot."))
-
-  baseGgplotPlot <- .getStaticGenericTimeseriesPlot(
+.getInteractiveComparisonObsFitPlot <- function(plot, ylab) {
+  comparisonData <- .combinePlotDataByExperiment(
     plot, maskColumns=c("nobs_total", "varname")
-  ) +
-    geom_text(
+  )
+  baseGgplotPlot <- .getStaticGenericTimeseriesPlot(
+    plot,
+    maskColumns=c("nobs_total", "varname"),
+    shapes=c(
+      fg_rms_total=15, an_rms_total=0,
+      fg_bias_total=16, an_bias_total=1
+    ),
+    showVariableLegend=TRUE,
+    comparisonData=comparisonData
+  ) + ylab(ylab)
+  chart <- .getInteractiveGenericTimeseriesPlot(baseGgplotPlot)
+  metricNames <- c(
+    "fg_rms_total", "an_rms_total", "fg_bias_total", "an_bias_total"
+  )
+  metricNames <- metricNames[metricNames %in% colnames(comparisonData)]
+
+  cleanPlotlyLegend(
+    chart,
+    .getPlotExperimentName(plot, "primary"),
+    .getComparisonExperimentNames(plot),
+    metricNames=metricNames,
+    experimentColours=.getExperimentColourValues(comparisonData$experiment)
+  )
+}
+
+firstGuessTotalTimeseriesPlottingFunction <- function(plot) {
+  if(!.plotHasAnyComparisonData(plot)) return(errorPlot("No data to plot."))
+
+  hasComp <- .plotHasComparison(plot)
+  dataPlot <- .getFirstNonEmptyComparisonPlot(plot)
+  if(hasComp) {
+    labelData <- .combinePlotDataByExperiment(plot, maskColumns=c("varname"))
+    timeSpan <- diff(range(as.numeric(labelData$DTG), na.rm=TRUE))
+    dodgeWidth <- if(is.finite(timeSpan) && timeSpan > 0) timeSpan / max(10, length(unique(labelData$DTG))) * 0.25 else 0.25
+    labelLayer <- geom_text(
+      data=labelData,
+      aes(x=DTG, y=fg_uncorr_total, label=nobs_total,
+        group=experiment, colour=experiment),
+      position=position_dodge(width=dodgeWidth),
+      show.legend=FALSE
+    )
+  } else {
+    labelLayer <- geom_text(
       data=plot$data, aes(x=DTG, y=fg_uncorr_total, label=nobs_total)
-    ) +
+    )
+  }
+  baseGgplotPlot <- .getStaticGenericTimeseriesPlot(
+    plot,
+    maskColumns=c("nobs_total", "varname"),
+    shapes=c(fg_bias_total=16, fg_uncorr_total=17),
+    showVariableLegend=hasComp,
+    comparisonLineAlpha=0.3,
+    comparisonPointSize=1.5
+  ) +
+    labelLayer +
     ylab(sprintf(
       "%s [%s]",
-      unique(plot$data$varname),
-      units(plot$dataWithUnits[["fg_bias_total"]])
+      unique(dataPlot$data$varname),
+      units(dataPlot$dataWithUnits[["fg_bias_total"]])
     ))
 
   if(plot$parentType$interactive) {

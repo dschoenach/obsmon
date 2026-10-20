@@ -76,6 +76,20 @@ works in general. The currently available options are:
     displayed in the GUI (on the right-hand side of the place where the
     code version info is displayed).
 
+-   `comparisonLineWidth`: Width of lines in comparison-mode joint
+    plots. This applies to comparison plots that overlay experiments in
+    the same plotting panel.\
+    Default: `0.85`\
+    Acceptable values: Any number greater than zero. Passing invalid
+    values will cause it to fall back to the default.
+
+-   `comparisonPointSizeScale`: Multiplier for symbols on lines in
+    comparison-mode joint plots. A value of `1.0` keeps the plot-specific
+    default symbol sizes.\
+    Default: `1.0`\
+    Acceptable values: Any number greater than zero. Passing invalid
+    values will cause it to fall back to the default.
+
 -   `logLevel`: Amount of detail that is logged.\
     Default: `WARN`\
     Valid values (in decreasing order of detail): `TRACE`, `DEBUG`,

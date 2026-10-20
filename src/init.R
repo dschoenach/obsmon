@@ -169,6 +169,22 @@ configGeneralFillInDefault <- function(config, key, default) {
         file.path(currentVal, paste0("obsmon_v", obsmonVersionMajorMinor)),
         mustWork=FALSE)
     },
+    "comparisonLineWidth"={
+      currentVal <- as.numeric(currentVal)
+      if(anyNA(currentVal) || any(!is.finite(currentVal)) || any(currentVal<=0)) {
+        flog.warn("Invalid comparisonLineWidth. Resetting to %s.", default)
+        currentVal <- default
+      }
+      currentVal
+    },
+    "comparisonPointSizeScale"={
+      currentVal <- as.numeric(currentVal)
+      if(anyNA(currentVal) || any(!is.finite(currentVal)) || any(currentVal<=0)) {
+        flog.warn("Invalid comparisonPointSizeScale. Resetting to %s.", default)
+        currentVal <- default
+      }
+      currentVal
+    },
     "logLevel"={
       if(isTRUE(cmdLineArgs$debug)) "DEBUG"
       else currentVal
@@ -230,6 +246,8 @@ configGeneralFillInDefaults <- function(config) {
   )
   config <- configGeneralFillInDefault(config, "initCheckDataExists", FALSE)
   config <- configGeneralFillInDefault(config, "logLevel", "WARN")
+  config <- configGeneralFillInDefault(config, "comparisonLineWidth", 0.85)
+  config <- configGeneralFillInDefault(config, "comparisonPointSizeScale", 1.0)
   config <- configGeneralFillInDefault(config, "maxAvgQueriesPerProc", Inf)
   config <- configGeneralFillInDefault(config, "maxExtraParallelProcs",
     Sys.getenv("OBSMON_MAX_N_EXTRA_PROCESSES")

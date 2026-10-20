@@ -6,9 +6,13 @@ and this project adheres to [Semantic Versioning](http://semver.org).
 
 ## [Unreleased]
 ### Fixed
+- Preserve lazy plot data fetching, active-observation RMS calculations and version 4.5.3.
+- Apply units, domain, standard-level grouping and minimum observation changes to all compared experiments.
+- Restore comparison legends for station profiles and experiment labels for land-sea departures.
 -  Correct Actions [!52](https://github.com/Hirlam/obsmon/pull/52)
 -  Correct ECMWF documentation [!51](https://github.com/Hirlam/obsmon/pull/51)
 ### Added
+- Compare multiple experiments in the main plot tab.
 -  Add GitHub Action to test installation on Ubuntu 24.04 [!48](https://github.com/Hirlam/obsmon/pull/48)
 ## [4.5.3] 2026-03-24
 ### Fixed

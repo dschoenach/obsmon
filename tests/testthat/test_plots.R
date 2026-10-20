@@ -674,3 +674,107 @@ test_that("plotTypes in actual obsmon plotRegistry can produce interactive plots
     )
   }
 })
+
+context("Comparison regressions")
+
+comparisonTestPlots <- function(parentType=mockPlotType, rawData=NULL) {
+  plots <- lapply(c("expA", "expB", "expC"), function(experiment) {
+    params <- mockUiInput
+    params$experiment <- experiment
+    plot <- obsmonPlotClass$new(
+      parentType=parentType, db=obsmonDb, paramsAsInUiInput=params
+    )
+    if(!is.null(rawData)) plot$rawData <- rawData
+    plot
+  })
+  plots[[1]]$compPlots <- plots[-1]
+  plots[[1]]
+}
+
+test_that("no-data checks fetch lazily and still recognise empty queries", {
+  plot <- comparisonTestPlots()
+  expect_equal(nrow(plot$rawData), 0)
+  expect_false(.plotHasNoDataRows(plot))
+  expect_gt(nrow(plot$rawData), 0)
+  plot$rawData <- plot$rawData[0, ]
+  expect_true(.plotHasNoDataRows(plot))
+})
+
+test_that("active ObsFit computes RMS rather than centred standard deviation", {
+  data <- data.frame(
+    DTG=as.POSIXct("2019-08-06 15:00:00", tz="UTC"),
+    level=32500, varname="t", fg_dep=c(3, 4, NA, 100),
+    an_dep=c(6, 8, NA, 100), active=c(1, 1, 1, 0),
+    rejected=0, passive=c(0, 0, 0, 1), blacklisted=0, anflag=0
+  )
+  units(data$fg_dep) <- "K"
+  units(data$an_dep) <- "K"
+  for(hasAnalysis in c(TRUE, FALSE)) {
+    input <- if(hasAnalysis) data else data[names(data) != "an_dep"]
+    result <- .obsFitActiveObsDataPostProcessingFunction(input)
+    expect_equal(drop_units(result$fg_rms_total), sqrt(12.5))
+    expect_equal(drop_units(result$fg_bias_total), 3.5)
+    expect_equal(as.character(units(result$fg_rms_total)), "K")
+    expect_equal(result$nobs_total, 3)
+    if(hasAnalysis) expect_equal(drop_units(result$an_rms_total), sqrt(50))
+  }
+})
+
+test_that("plot settings update all experiments and invalidate processed data", {
+  plot <- comparisonTestPlots()
+  experiments <- c(list(plot), .getComparisonPlots(plot))
+  originalLevels <- lapply(experiments, function(p) p$data$level)
+  originalValues <- lapply(experiments, function(p) p$data$obsvalue)
+  originalRaw <- lapply(experiments, function(p) p$rawData)
+  params <- list(
+    levelsUnits="hPa", variableUnits="degC",
+    groupLevelsIntoStandardSwitch=FALSE, minNobsForGriddedAverages=5
+  )
+  domain <- domainClass()
+  .updateComparisonPlotSettings(plot, params=params, modelDomain=domain)
+  for(i in seq_along(experiments)) {
+    p <- experiments[[i]]
+    expect_equal(p$paramsAsInUiInput[names(params)], params)
+    expect_identical(p$modelDomain, domain)
+    expect_equal(p$data$level, originalLevels[[i]] / 100)
+    expect_equal(p$data$obsvalue, originalValues[[i]] - 273.15)
+    expect_equal(p$rawData, originalRaw[[i]])
+  }
+})
+
+test_that("station profile comparisons retain one legend per experiment and metric", {
+  for(name in c("Station Vertical Profile: Obsvalue",
+                "Station Vertical Profile: Obs, FG & Analysis")) {
+    plot <- comparisonTestPlots(
+      plotRegistry$plotTypes[[name]],
+      data.frame(level=rep(c(32500, 40000), each=2),
+                 obsvalue=280:283, fg_dep=1:4, an_dep=2:5)
+    )
+    chart <- plotly_build(plot$chart)
+    legend <- Filter(function(trace) isTRUE(trace$showlegend), chart$x$data)
+    metrics <- if(grepl("Obsvalue$", name)) "obsvalue" else c("obsvalue", "first_guess", "analysis")
+    expected <- as.vector(outer(c("expA", "expB", "expC"), metrics, paste, sep=": "))
+    expect_setequal(vapply(legend, `[[`, character(1), "name"), expected)
+    expect_length(legend, length(expected))
+  }
+})
+
+test_that("land-sea comparisons label every experiment and legend", {
+  raw <- data.frame(
+    DTG=as.POSIXct(c("2019-08-06 12:00:00", "2019-08-06 15:00:00"), tz="UTC"),
+    level=1, nobs_total=5, nobs_land=2, nobs_sea=3,
+    fg_uncorr_sea=1:2, fg_dep_sea=2:3, an_dep_sea=3:4,
+    fg_uncorr_land=4:5, fg_dep_land=5:6, an_dep_land=6:7
+  )
+  plot <- comparisonTestPlots(plotRegistry$plotTypes[["Land-sea departures"]], raw)
+  chart <- plotly_build(plot$chart)
+  titles <- vapply(chart$x$layout$annotations, function(a) a$text, character(1))
+  expect_true(all(c("expA", "expB", "expC") %in% titles))
+  legend <- Filter(function(trace) isTRUE(trace$showlegend), chart$x$data)
+  labels <- vapply(legend, `[[`, character(1), "name")
+  for(experiment in c("expA", "expB", "expC")) {
+    expect_true(paste0(experiment, ": fg_uncorr_sea") %in% labels)
+    expect_true(paste0(experiment, ": nobs_land") %in% labels)
+  }
+  expect_true(all(grepl("^exp[ABC]: ", labels)))
+})

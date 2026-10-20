@@ -26,6 +26,8 @@
     sessionTimeout = 1800 # In seconds. Optional.
     appTimeout = 5 # In seconds. Optional.
     multiPlotsEnableInteractivity = true # The default value is false
+    comparisonLineWidth = 0.85 # Width of lines in comparison-mode joint plots
+    comparisonPointSizeScale = 1.0 # Multiplier for symbols on comparison-mode lines
 
 ######################################
 # Configuring domain grid & geometry #

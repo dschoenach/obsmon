@@ -97,6 +97,59 @@ observeEvent(input$doPlot, {
     return(NULL)
   }
 
+  enableComparison <- isTRUE(input$enableComparison)
+  plotType <- activePlotType()
+  if(enableComparison && !.plotSupportsComparison(plotType)) {
+    showNotification(
+      sprintf("Comparison is not supported for %s. Plotting the primary experiment only.", plotType$name),
+      type="warning", duration=5
+    )
+    enableComparison <- FALSE
+  }
+  compSelections <- .getSelectedCompExperimentSlots(input)
+  selectedCompExperiments <- compSelections$experiment
+  if(enableComparison && length(selectedCompExperiments)==0) {
+    showNotification(
+      "Select at least one comparison experiment.",
+      type="error", duration=2
+    )
+    replaceObsmonPlotObj(NA)
+    return(NULL)
+  }
+
+  primaryDb <- req(activeDb())
+  plotDtgs <- selectedDtgs()
+  compDbs <- list()
+  if (enableComparison) {
+    compDbs <- compActiveDbs()
+    unusableExperiments <- vapply(compDbs, function(compDbConfig) {
+      db <- compDbConfig$db
+      is.null(db) || !isTRUE(dir.exists(db$dir)) ||
+        length(tryCatch(
+          db$getDataFilePaths(selectedDtgs=plotDtgs, assertExists=TRUE),
+          error=function(e) character(0)
+        )) == 0
+    }, logical(1))
+    if(any(unusableExperiments) || length(compDbs) != length(selectedCompExperiments)) {
+      missingExperiments <- vapply(
+        compDbs[unusableExperiments], `[[`, character(1), "experimentName"
+      )
+      if(length(compDbs) != length(selectedCompExperiments)) {
+        missingExperiments <- unique(c(missingExperiments, setdiff(
+          selectedCompExperiments,
+          vapply(compDbs, `[[`, character(1), "experimentName")
+        )))
+      }
+      showNotification(
+        sprintf("No usable comparison database is available for: %s.",
+          paste(missingExperiments, collapse=", ")),
+        type="error", duration=5
+      )
+      replaceObsmonPlotObj(NA)
+      return(NULL)
+    }
+  }
+  primaryExperimentName <- input$experiment
   # All checks performed: We can now proceed with the plot request
   plotStartedNotifId(showNotification(
     "Processing plot request...", type="message", duration=NULL
@@ -107,7 +160,7 @@ observeEvent(input$doPlot, {
 
   # Fetch raw data asyncronously so that the app ramins responsive
   asyncNewPlotAndOutput <- futureCall(
-    FUN=function(parentType, db, paramsAsInUiInput, modelDomain, ...) {
+    FUN=function(parentType, db, paramsAsInUiInput, modelDomain, enableComparison, compDbs, primaryExperimentName, ...) {
       output <- capture.output({
         newPlot <- obsmonPlotClass$new(
           parentType=parentType,
@@ -116,21 +169,55 @@ observeEvent(input$doPlot, {
           paramsAsInUiInput=paramsAsInUiInput
         )
         newPlot$fetchRawData(...)
+        newPlot$primaryExperimentName <- primaryExperimentName
+
+        if (enableComparison && length(compDbs)>0) {
+          compPlots <- list()
+          for (compDbConfig in compDbs) {
+            compParamsAsInUiInput <- paramsAsInUiInput
+            compParamsAsInUiInput$experiment <- compDbConfig$experimentName
+            compParamsAsInUiInput$odbBase <- compDbConfig$db$dbType
+
+            compPlot <- obsmonPlotClass$new(
+              parentType=parentType,
+              db=compDbConfig$db,
+              modelDomain=modelDomain,
+              paramsAsInUiInput=compParamsAsInUiInput
+            )
+            compPlot$fetchRawData()
+            compPlot$primaryExperimentName <- compDbConfig$experimentName
+            compPlots[[length(compPlots)+1]] <- compPlot
+          }
+
+          newPlot$compPlots <- compPlots
+        }
       })
       return(list(newPlot=newPlot, output=output))
     },
     args=list(
-      parentType=activePlotType(),
-      db=req(activeDb()),
+      parentType=plotType,
+      db=primaryDb,
       paramsAsInUiInput=reactiveValuesToList(input),
       progressFile=plotProgressFile(),
-      modelDomain=sessionDomain()
-    )
+      modelDomain=sessionDomain(),
+      enableComparison=enableComparison,
+      compDbs=compDbs,
+      primaryExperimentName=primaryExperimentName
+    ),
+    seed=TRUE
   )
   currentPlotPid(asyncNewPlotAndOutput$job$pid)
 
   then(asyncNewPlotAndOutput,
     onFulfilled=function(value) {
+      missingExperiments <- .getMissingComparisonExperimentNames(value$newPlot)
+      if(length(missingExperiments) > 0) {
+        showNotification(
+          sprintf("No matching data for %s; continuing with the experiments that returned data.",
+            paste(missingExperiments, collapse=", ")),
+          type="warning", duration=8
+        )
+      }
       replaceObsmonPlotObj(value$newPlot)
     },
     onRejected=function(e) {
@@ -218,7 +305,8 @@ observeEvent(replaceObsmonPlotObj(), {
     invisible(newObsmonPlotObj$leafletMap)
     return(newObsmonPlotObj)
   },
-    args=list(env=env)
+    args=list(env=env),
+    seed=TRUE
   )
   currentPlotPid(futureNewObsmonPlotObj$job$pid)
 
@@ -257,8 +345,9 @@ updatePlotAfterUnitsChange <- reactive({
 }) %>% debounce(1000)
 observeEvent(updatePlotAfterUnitsChange(), {
   newObsmonPlotObj <- req(obsmonPlotObj())
-  newObsmonPlotObj$paramsAsInUiInput$levelsUnits <- levelsUnits()
-  newObsmonPlotObj$paramsAsInUiInput$variableUnits <- variableUnits()
+  .updateComparisonPlotSettings(newObsmonPlotObj, params=list(
+    levelsUnits=levelsUnits(), variableUnits=variableUnits()
+  ))
   replaceObsmonPlotObj(newObsmonPlotObj)
 }, ignoreNULL=FALSE)
 
@@ -266,7 +355,7 @@ observeEvent(updatePlotAfterUnitsChange(), {
 observeEvent(sessionDomain(), {
   newObsmonPlotObj <- req(obsmonPlotObj())
   req(grepl("maps", tolower(newObsmonPlotObj$parentType$category)))
-  newObsmonPlotObj$modelDomain <- sessionDomain()
+  .updateComparisonPlotSettings(newObsmonPlotObj, modelDomain=sessionDomain())
   replaceObsmonPlotObj(newObsmonPlotObj)
 })
 
@@ -278,16 +367,18 @@ newMinNObsGriddedAvgs <- eventReactive(input$minNobsForGriddedAverages, {
 }) %>% debounce(1000)
 observeEvent(newMinNObsGriddedAvgs(), {
   newObsmonPlotObj <- req(obsmonPlotObj())
-  newObsmonPlotObj$paramsAsInUiInput$minNobsForGriddedAverages <-
-    newMinNObsGriddedAvgs()
+  .updateComparisonPlotSettings(newObsmonPlotObj, params=list(
+    minNobsForGriddedAverages=newMinNObsGriddedAvgs()
+  ))
   replaceObsmonPlotObj(newObsmonPlotObj)
 })
 
 # If user asks for levels to be grouped into standard ones
 observeEvent(input$groupLevelsIntoStandardSwitch, {
   newObsmonPlotObj <- req(obsmonPlotObj())
-  newObsmonPlotObj$paramsAsInUiInput$groupLevelsIntoStandardSwitch <-
-    input$groupLevelsIntoStandardSwitch
+  .updateComparisonPlotSettings(newObsmonPlotObj, params=list(
+    groupLevelsIntoStandardSwitch=input$groupLevelsIntoStandardSwitch
+  ))
   replaceObsmonPlotObj(newObsmonPlotObj)
 })
 
@@ -466,7 +557,7 @@ output$plot <- renderPlot({
 
 # (ii) Rendering dataTables
 output$rawDataTable <- renderDataTable({
-  req(obsmonPlotObj())$rawData
+  req(obsmonPlotObj())$queryRawData
 },
   options=list(scrollX=TRUE, scrollY="300px")
 )
@@ -482,7 +573,7 @@ output$rawDataTableDownloadAsCsv <- downloadHandler(
 )
 
 output$plotDataTable <- renderDataTable({
-  req(obsmonPlotObj())$dataWithUnits
+  req(obsmonPlotObj())$queryDataWithUnits
 },
   options=list(scrollX=TRUE, scrollY="300px")
 )
