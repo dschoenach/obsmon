@@ -872,3 +872,177 @@ test_that("comparison progress continues through all experiment queries", {
     expect_gt(nrow(plots[[i]]$rawData), 0)
   }
 })
+
+test_that("comparison caches do not change the primary hash or rerender charts", {
+  type <- mockPlotType$copy()
+  renders <- 0
+  type$plottingFunction <- function(plot) {
+    renders <<- renders + 1
+    invisible(.combinePlotDataByExperiment(plot))
+    ggplot() + theme_void()
+  }
+  type$category <- "Statistical"
+  plot <- comparisonTestPlots(type)
+  for(p in c(list(plot), .getComparisonPlots(plot))) p$fetchRawData()
+  for(levelsUnits in c("Pa", "hPa")) {
+    .updateComparisonPlotSettings(plot, params=list(levelsUnits=levelsUnits))
+    hash <- plot$hash
+    before <- renders
+    chart <- plot$chart
+    expect_equal(plot$hash, hash)
+    expect_identical(plot$chart, chart)
+    expect_equal(renders, before + 1)
+  }
+  hash <- plot$hash
+  plot$compPlots[[1]]$.cache$extra <- "cached value"
+  expect_equal(plot$hash, hash)
+  plot$compPlots[[1]]$paramsAsInUiInput$levelsUnits <- "kPa"
+  expect_false(identical(plot$hash, hash))
+})
+
+test_that("gridded comparison fills use the same scale as the colourbar", {
+  panels <- lapply(list(c(-2, 1), c(1, 5), c(-5, 1)), function(values) {
+    list(x=list(data=list(
+      list(marker=list(color=values, colorbar=list(title="Value"), showscale=TRUE)),
+      list(fill="toself", fillcolor="red", customdata=list(value=values[[1]])),
+      list(fill="toself", fillcolor="blue", customdata=list(value=values[[2]]))
+    )))
+  })
+  shared <- .shareComparisonMapColorScale(panels, c("expA", "expB", "expC"))
+  cm <- .getSuitableColorScale(c(-2, 1, 1, 5, -5, 1))
+  palette <- colorNumeric(cm$palette, cm$domain)
+  for(panel in shared) {
+    for(trace in panel$x$data[-1]) {
+      expect_equal(trace$fillcolor, palette(trace$customdata$value))
+    }
+    expect_equal(panel$x$data[[1]]$marker$cmin, cm$domain[[1]])
+    expect_equal(panel$x$data[[1]]$marker$cmax, cm$domain[[2]])
+  }
+  expect_equal(shared[[1]]$x$data[[3]]$fillcolor, shared[[2]]$x$data[[2]]$fillcolor)
+  expect_equal(sum(vapply(shared, function(p) p$x$data[[1]]$marker$showscale, logical(1))), 1)
+})
+
+test_that("zero standard deviations keep comparison errorbars centred on bars", {
+  raw <- data.frame(level=1, fg_bias_total=1:4, an_bias_total=2:5,
+                    fg_rms_total=3:6, an_rms_total=4:7)
+  plot <- comparisonTestPlots(
+    plotRegistry$plotTypes[["Average First Guess and Analysis Bias/RMS"]], raw)
+  plot$compPlots[[1]]$rawData$fg_bias_total <- 2
+  plot$compPlots[[2]]$rawData$an_bias_total <- 3
+  for(p in c(list(plot), .getComparisonPlots(plot))) {
+    p$paramsAsInUiInput$obname <- "synop"
+    p$paramsAsInUiInput$variable <- "t2m"
+  }
+  built <- ggplot_build(firstGuessAndAnPlottingFunction(plot))
+  bars <- built$data[[1]]
+  errors <- built$data[[2]]
+  bars <- bars[order(bars$group, bars$x), ]
+  errors <- errors[order(errors$group, errors$x), ]
+  expect_equal(as.numeric(errors$x), as.numeric(bars$x))
+  expect_equal(errors$y, bars$y)
+  zero <- is.na(errors$ymin)
+  expect_equal(sum(zero), 2)
+  expect_true(all(is.na(errors$ymax[zero])))
+  expect_null(getSdBarData(data.frame(level=1, fg_mean=2, fg_sd=0)))
+})
+
+test_that("map comparison overall titles sit above experiment titles", {
+  raw <- data.frame(latitude=c(60, 61), longitude=c(20, 21),
+                    level=32500, statid=c("a", "b"), obsvalue=280:281, fg_dep=1:2)
+  plot <- comparisonTestPlots(
+    plotRegistry$plotTypes[["First Guess Departure Map"]], raw)
+  chart <- plotly_build(plot$chart)
+  annotations <- chart$x$layout$annotations
+  for(experiment in c("expA", "expB", "expC")) {
+    panel <- Filter(function(a) identical(a$text, experiment), annotations)
+    overall <- Filter(function(a) startsWith(a$text, "expA vs expB, expC:"), annotations)
+    expect_length(panel, 1)
+    expect_length(overall, 1)
+    expect_gt(overall[[1]]$y, panel[[1]]$y)
+  }
+  expect_equal(chart$x$layout$margin$t, 150)
+})
+
+test_that("query file lookup and progress include hours between selected cycles", {
+  requested <- NULL
+  db <- list(getDataFilePaths=function(selectedDtgs) {
+    requested <<- selectedDtgs
+    as.character(selectedDtgs)
+  })
+  dtgs <- list("2019-08-06", "2019-08-06", c(12, 15))
+  expect_equal(.getQueryDataFilePaths(db, dtgs), as.character(2019080612:2019080615))
+  expect_equal(requested, 2019080612:2019080615)
+  expect_equal(.getQueryDataFilePaths(db, 2019080615), "2019080615")
+})
+
+test_that("comparison database choices preserve valid selections on rebuild", {
+  definitions <- parse("../../src/server/server_main_tab.R")
+  wanted <- c(".getSelectedCompExperimentSlots", ".compOdbBaseInputId",
+              ".getCompDbChoices", "output$compOdbBaseChoices")
+  definitions <- Filter(function(expr) {
+    is.call(expr) && identical(expr[[1]], as.name("<-")) &&
+      paste(deparse(expr[[2]]), collapse="") %in% wanted
+  }, as.list(definitions))
+  expect_length(definitions, 4)
+  shiny::testServer(function(input, output, session) {
+    expt <- list(dbs=list(
+      ecma=list(dbType="ecma", dir=tempdir()),
+      ccma=list(dbType="ccma", dir=tempdir())
+    ))
+    expts <- list(expB=expt, expC=expt, expD=expt)
+    for(expr in definitions) eval(expr)
+  }, {
+    session$setInputs(enableComparison=TRUE, compExperiment="expB",
+      compExperiment2="expC", compOdbBase_1="ccma", compOdbBase_2="ccma")
+    selected <- function() {
+      html <- output$compOdbBaseChoices$html
+      matches <- gregexpr('value="ccma" selected', html, fixed=TRUE)[[1]]
+      sum(matches > 0)
+    }
+    expect_equal(selected(), 2)
+    session$setInputs(compExperiment="expD")
+    expect_equal(selected(), 2)
+    session$setInputs(compOdbBase_1="invalid", compExperiment="expB")
+    expect_equal(selected(), 1)
+  })
+})
+
+test_that("the fetch worker returns missing experiments after processing data", {
+  findWorker <- function(expr) {
+    if(!is.call(expr) && !is.expression(expr)) return(NULL)
+    if(is.call(expr) && identical(expr[[1]], as.name("futureCall"))) {
+      fun <- expr[["FUN"]]
+      if("enableComparison" %in% names(formals(eval(fun)))) return(fun)
+    }
+    for(child in as.list(expr)) {
+      worker <- findWorker(child)
+      if(!is.null(worker)) return(worker)
+    }
+    NULL
+  }
+  worker <- eval(findWorker(parse("../../src/server/server_main_tab_plots.R")))
+  expect_true(is.function(worker))
+  type <- mockPlotType$copy()
+  processed <- character(0)
+  type$dataPostProcessingFunction <- function(data, obsmonPlotObj) {
+    experiment <- obsmonPlotObj$primaryExperimentName
+    processed <<- c(processed, experiment)
+    if(experiment == "expB") data[0, ] else data
+  }
+  params <- mockUiInput
+  params$experiment <- "expA"
+  comparisonDbs <- lapply(c("expB", "expC"), function(name) {
+    list(experimentName=name, db=obsmonDb)
+  })
+  result <- worker(parentType=type, db=obsmonDb, paramsAsInUiInput=params,
+    modelDomain=domainClass(), enableComparison=TRUE, compDbs=comparisonDbs,
+    primaryExperimentName="expA", progressFile=NULL)
+  expect_equal(result$missingExperiments, "expB")
+  expect_setequal(processed, c("expA", "expB", "expC"))
+  processed <- character(0)
+  result <- worker(parentType=type, db=obsmonDb, paramsAsInUiInput=params,
+    modelDomain=domainClass(), enableComparison=FALSE, compDbs=list(),
+    primaryExperimentName="expA", progressFile=NULL)
+  expect_equal(result$missingExperiments, character(0))
+  expect_length(processed, 0)
+})

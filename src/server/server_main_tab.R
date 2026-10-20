@@ -655,10 +655,15 @@ output$compOdbBaseChoices <- renderUI({
     expt <- expts[[compExperiment]]
     if(is.null(expt)) return(NULL)
 
+    id <- .compOdbBaseInputId(slot)
+    choices <- .getCompDbChoices(expt)
+    selected <- isolate(input[[id]])
+    if(length(selected) != 1 || !selected %in% choices) selected <- NULL
     pickerInput(
-      inputId=.compOdbBaseInputId(slot),
+      inputId=id,
       label=sprintf("%s Database", compExperiment),
-      choices=.getCompDbChoices(expt)
+      choices=choices,
+      selected=selected
     )
   }))
 })

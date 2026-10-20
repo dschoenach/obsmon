@@ -164,18 +164,22 @@ performSingleQuery <- function(iPath, dbpaths, query, progressFile=NULL,
   singleFileQuerier(dbpaths[iPath], query)
 }
 
+.getQueryDataFilePaths <- function(db, dtgs) {
+  selectedDtgs <- dtgs
+  if(length(dtgs)>1) {
+    range <- summariseDtgRange(dtgs)
+    selectedDtgs <- expandDtgRange(range)
+  }
+  db$getDataFilePaths(selectedDtgs)
+}
+
 performQuery <- function(
   db, query, dtgs,
   maxAvgQueriesPerProc=obsmonConfig$general$maxAvgQueriesPerProc,
   progressFile=NULL, progressOffset=0, progressTotal=NULL
 ) {
   startTime <- Sys.time() # For debug purposes
-  selectedDtgs <- dtgs
-  if(length(dtgs)>1) {
-    range <- summariseDtgRange(dtgs)
-    selectedDtgs <- expandDtgRange(range)
-  }
-  dbpaths <- db$getDataFilePaths(selectedDtgs)
+  dbpaths <- .getQueryDataFilePaths(db, dtgs)
   if(is.null(progressTotal)) progressTotal <- length(dbpaths)
 
   res <- tryCatch({

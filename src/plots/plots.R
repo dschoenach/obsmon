@@ -361,6 +361,7 @@ lockBinding("SPINNER_CHART", globalenv())
   if(length(colorValues)==0) return(panels)
 
   colorMap <- .getSuitableColorScale(colorValues)
+  dataPal <- colorNumeric(palette=colorMap$palette, domain=colorMap$domain)
   scaleColors <- grDevices::colorRampPalette(colorMap$palette)(25)
   sharedColorscale <- cbind(
     as.character(seq(0, 1, length.out=length(scaleColors))),
@@ -385,7 +386,11 @@ lockBinding("SPINNER_CHART", globalenv())
 
   for(panelIndex in seq_along(panels)) {
     for(traceIndex in seq_along(panels[[panelIndex]]$x$data)) {
-      marker <- panels[[panelIndex]]$x$data[[traceIndex]]$marker
+      trace <- panels[[panelIndex]]$x$data[[traceIndex]]
+      if(identical(trace$fill, "toself")) {
+        panels[[panelIndex]]$x$data[[traceIndex]]$fillcolor <- dataPal(trace$customdata$value)
+      }
+      marker <- trace$marker
       if(!is.numeric(marker$color)) next
       marker$cmin <- colorMap$domain[[1]]
       marker$cmax <- colorMap$domain[[2]]
@@ -495,7 +500,8 @@ lockBinding("SPINNER_CHART", globalenv())
       geoLayout <- setNames(lapply(seq_along(domains), function(i) {
         list(domain=list(x=domains[[i]]))
       }), if(length(domains) == 1) "geo" else c("geo", paste0("geo", seq.int(2, length(domains)))))
-      combined <- do.call(layout, c(list(p=combined), geoLayout))
+      combined <- do.call(layout, c(list(p=combined, margin=list(t=150)), geoLayout))
+      attr(combined, "yTitle") <- 1.1
     }
     return(combined)
   }
@@ -760,6 +766,10 @@ plotTypeClass <- setRefClass(Class="obsmonPlotType",
     if(is(component, "envRefClass")) {
       # Parse recursively so that we also handle the special cases listed above
       componentsHash <- .refClassObjHash(component)
+    } else if(is.list(component)) {
+      componentsHash <- digest::digest(lapply(component, function(item) {
+        if(is(item, "envRefClass")) .refClassObjHash(item) else digest::digest(item)
+      }))
     } else {
       componentsHash <- digest::digest(component)
     }

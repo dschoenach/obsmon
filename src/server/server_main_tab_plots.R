@@ -163,7 +163,7 @@ observeEvent(input$doPlot, {
 
   # Fetch raw data asyncronously so that the app ramins responsive
   asyncNewPlotAndOutput <- futureCall(
-    FUN=function(parentType, db, paramsAsInUiInput, modelDomain, enableComparison, compDbs, primaryExperimentName, progressFile, plotDtgs) {
+    FUN=function(parentType, db, paramsAsInUiInput, modelDomain, enableComparison, compDbs, primaryExperimentName, progressFile) {
       output <- capture.output({
         newPlot <- obsmonPlotClass$new(
           parentType=parentType,
@@ -194,7 +194,7 @@ observeEvent(input$doPlot, {
         }
         plots <- c(list(newPlot), .getComparisonPlots(newPlot))
         queryCounts <- vapply(plots, function(plot) {
-          length(plot$db$getDataFilePaths(selectedDtgs=plotDtgs))
+          length(.getQueryDataFilePaths(plot$db, plot$paramsAsInSqliteDbs$dtg))
         }, integer(1))
         offset <- 0
         for(i in seq_along(plots)) {
@@ -202,15 +202,19 @@ observeEvent(input$doPlot, {
             progressOffset=offset, progressTotal=sum(queryCounts))
           offset <- offset + queryCounts[[i]]
         }
+        missingExperiments <- if(enableComparison) {
+          .getMissingComparisonExperimentNames(newPlot)
+        } else {
+          character(0)
+        }
       })
-      return(list(newPlot=newPlot, output=output))
+      return(list(newPlot=newPlot, output=output, missingExperiments=missingExperiments))
     },
     args=list(
       parentType=plotType,
       db=primaryDb,
       paramsAsInUiInput=reactiveValuesToList(input),
       progressFile=plotProgressFile(),
-      plotDtgs=plotDtgs,
       modelDomain=sessionDomain(),
       enableComparison=enableComparison,
       compDbs=compDbs,
@@ -222,7 +226,7 @@ observeEvent(input$doPlot, {
 
   then(asyncNewPlotAndOutput,
     onFulfilled=function(value) {
-      missingExperiments <- .getMissingComparisonExperimentNames(value$newPlot)
+      missingExperiments <- value$missingExperiments
       if(length(missingExperiments) > 0) {
         showNotification(
           sprintf("No matching data for %s; continuing with the experiments that returned data.",

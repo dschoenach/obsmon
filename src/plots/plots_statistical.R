@@ -1,4 +1,4 @@
-getSdBarData <- function(plotData) {
+getSdBarData <- function(plotData, keepZeroSd=FALSE) {
     # Identify columns in the data for properties with mean & sd info
     propertiesWithMeanAndSd <- c()
     for(colname in colnames(plotData)) {
@@ -33,8 +33,8 @@ getSdBarData <- function(plotData) {
       rownames(sdBarData) <- NULL
       sdBarData$property <- paste0(sdBarData$property, "_sd")
 
-      # Error bars with zero width are just clutter. Removing these.
-      sdBarData <- sdBarData[sdBarData$sd > 0, ]
+      # Comparison bars retain zero-sd rows to keep their dodge slots.
+      if(!keepZeroSd) sdBarData <- sdBarData[sdBarData$sd > 0, ]
       if(nrow(sdBarData) == 0) sdBarData <- NULL
     }
     return(sdBarData)
@@ -74,15 +74,16 @@ addErrorbar <- function(obplot, sdBarData, strObnumber, hasComp=FALSE) {
           inherit.aes=TRUE,
           show.legend=TRUE,
           width=errorbarWidth,
+          na.rm=TRUE,
           mapping=aes(
             x=variable,
             y=mean,
-            ymin=mean - sd,
-            ymax=mean + sd,
-            group=paste(experiment, property, sep=" :: "),
+            ymin=ifelse(sd == 0, NA_real_, mean - sd),
+            ymax=ifelse(sd == 0, NA_real_, mean + sd),
+            group=experiment,
             colour=experiment
           ),
-          position=position_dodge(width=0.8)
+          position=position_dodge(width=0.8, preserve="single")
         )
     } else {
       obplot <- obplot +
@@ -140,7 +141,8 @@ firstGuessAndAnPlottingFunction <-  function(plot) {
     )
     sdBarDataList <- list()
     for(i in seq_along(plots)) {
-      oneSdBarData <- getSdBarData(plots[[i]]$data)
+      oneSdBarData <- getSdBarData(plots[[i]]$data,
+        keepZeroSd=as.character(sqliteParams$obnumber) %in% c("1", "4", "9"))
       if(is.null(oneSdBarData)) next
       oneSdBarData$experiment <- experimentNames[[i]]
       sdBarDataList[[length(sdBarDataList)+1]] <- oneSdBarData
